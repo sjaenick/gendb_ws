@@ -1,0 +1,237 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+use IO::Handle;
+use Term::ReadKey;
+use Switch;
+
+use GENDB::Remote::Server::ToolList;
+use GENDB::Remote::Server::Tool;
+use GENDB::Remote::Server::Configuration;
+
+my $cfgfile = $ENV{gendb_VAR_DIR}.'/server.config';
+my $config = GENDB::Remote::Server::Configuration->new($cfgfile);
+my $tooldb = $config->get("ToolDB");
+
+use constant TOOLDB => $tooldb;
+
+unless (scalar(@ARGV) == 1) {
+    usage();
+}
+
+switch ($ARGV[0]) {
+    case "-at"          { add_tool(); }
+    case "-lt"          { list_tools(); }
+    case "-dt"          { delete_tool(); }
+    case "-e"           { enable_tool(); }
+    case "-d"           { disable_tool(); }
+    else                { usage(); }
+}
+
+sub usage {
+    print <<EOF;
+
+  GenDB WebServices Server Administration
+
+  -at   Add a new tool
+  -dt   Delete a tool
+  -lt   List tools
+
+  -e    Enable a tool
+  -d    Disable a tool
+
+EOF
+    exit 1;
+}
+
+
+sub add_tool {
+    my %tool;
+    ReadMode('normal');
+    print "(M)andatory, (O)ptional, Ctrl-C to abort.\n\n";
+    print "(M) Tool name: "; $tool{tool_name} = ReadLine(0); chomp $tool{tool_name};
+
+    # FIXME - check if tool name exists
+    my $tool_list = GENDB::Remote::Server::ToolList->new(TOOLDB);
+    while (ref($tool_list->by_name($tool{tool_name})) eq 'HASH') {
+        print "Tool ".$tool{tool_name}." already exists.\n";
+        print "(M) Tool name: "; $tool{tool_name} = ReadLine(0); chomp $tool{tool_name};
+    }
+
+
+    print "(M) Tool description: "; $tool{tool_descr} = ReadLine(0); chomp $tool{tool_descr};
+    while ($tool{tool_descr} !~ /^.+$/) {
+        print "(M) Tool description: "; $tool{tool_descr} = ReadLine(0); chomp $tool{tool_descr};
+    }
+
+    my %data;
+    print "(M) Scheduler class: "; $data{SCHED_CLASS} = ReadLine(0); chomp $data{SCHED_CLASS};
+    while ($data{SCHED_CLASS} !~ /^.+$/) {
+        print "(M) Scheduler class: "; $data{SCHED_CLASS} = ReadLine(0); chomp $data{SCHED_CLASS};
+    }
+
+    print "(O) Optional scheduler parameters: "; $data{SCHED_OPTS} = ReadLine(0); chomp $data{SCHED_OPTS};
+
+    print "\nStandard or extended tool (S/E)? "; my $type = uc(ReadLine(0)); chomp $type;
+    while ($type !~ /^[SE]$/) {
+        print "Standard or extended tool (S/E)? "; $type = uc(ReadLine(0)); chomp $type;
+    }
+    print "\nUse _INPUT_ and/or _FASTA_INPUT_ as placeholders for input filenames,\n";
+    print "attribute names (for RUN_CMD) as placeholders for their values.\n\n";
+
+    if ($type eq "S") {
+        print "(M) EXEC_CMD: "; $data{EXEC_CMD} = ReadLine(0); chomp $data{EXEC_CMD};
+        while ($data{EXEC_CMD} !~ /^.+$/) {
+            print "(M) EXEC_CMD: "; $data{EXEC_CMD} = ReadLine(0); chomp $data{EXEC_CMD};
+        }
+
+        print "(M) RUN_CMD: ";  $data{RUN_CMD} = ReadLine(0); chomp $data{RUN_CMD};
+        while ($data{RUN_CMD} !~ /^.+$/) {
+            print "(M) RUN_CMD: ";  $data{RUN_CMD} = ReadLine(0); chomp $data{RUN_CMD};
+        }
+
+    } else {
+        print "(M) CLASS: "; $data{CLASS} = ReadLine(0); chomp $data{CLASS};
+        while ($data{CLASS} !~ /^.+$/) {
+            print "(M) CLASS: "; $data{CLASS} = ReadLine(0); chomp $data{CLASS};
+        }
+
+        print "\nAdditional parameters may be entered using the format \"key=value\",\n";
+        print "use an empty line when finished.\n\n";
+        print "(O) Additional parameters: "; my $p = ReadLine(0); chomp $p;
+        while ($p  =~ /^.*\=.*$/) {
+            my ($key, $value) = split(/=/, $p);
+            if (defined($key)) { $data{$key} = $value; }
+            print "(O) Additional parameters (cont\'d.): "; $p = ReadLine(0); chomp $p;
+        }
+    }
+
+    $tool{tool_data} = \%data;
+
+    print "(M) Enable this tool (Y/N)? "; $tool{enabled} = uc(ReadLine(0)); chomp $tool{enabled};
+    while ($tool{enabled} !~ /^[YN]$/) {
+        print "(M) Enable this tool (Y/N)? ";  $tool{enabled} = uc(ReadLine(0)); chomp $tool{enabled};
+    }
+    if ($tool{enabled} eq "Y") { $tool{enabled} = 1; } else { $tool{enabled} = 0; }
+
+    my $t = GENDB::Remote::Server::Tool->new(%tool);
+    print "\nAdded new tool ".$t->name." with ID ".$t->id."\n";
+}
+
+sub list_tools {
+    my $tool_list = GENDB::Remote::Server::ToolList->new(TOOLDB);
+
+    my @tools = @{$tool_list->list()};
+    if (scalar @tools) {
+
+        print " ID  | Name          | Description                                      | Enabled\n";
+        print "-----+---------------+--------------------------------------------------+--------\n";
+
+        foreach my $t (@tools) {
+            if ( $t->{enabled} != 1) {
+                $t->{enabled} = "N";
+            } else {
+                $t->{enabled} = "Y";
+            }
+            my $line = sprintf(" %03d | %-13s | %-48s | %4s\n", $t->{tool_id}, $t->{tool_name},
+               $t->{tool_descr}, $t->{enabled});
+            print $line;
+         }
+         print "-----+---------------+--------------------------------------------------+--------\n";
+    }
+}
+
+sub delete_tool {
+    my $id;
+    ReadMode('normal');
+    print "Tool ID ('X' to list tools): "; $id = ReadLine(0);
+    chomp $id;
+
+    if ($id =~ /^X$/ ) {
+        my $tool_list = GENDB::Remote::Server::ToolList->new(TOOLDB);
+        print "\n";
+        foreach (@{$tool_list->list()}) {
+            print $_->{tool_id}." |  ".$_->{tool_name}."\n";
+        }
+        print "\n";
+    } 
+    while ($id !~ /^\d+$/ ) {
+        if ($id ne "X") { print "Value has to be numeric.\n"; }
+        print "Tool ID: "; $id = ReadLine(0);
+        chomp $id;
+    }
+
+    my $tool = GENDB::Remote::Server::Tool->init($id);
+    unless ($tool->delete()) {
+        die "Could not remove tool.\n";
+    }
+    print "Removed tool ".$tool->name()."\n";
+}
+
+
+sub enable_tool {
+    my $id;
+    ReadMode('normal');
+    print "Tool ID ('X' to list tools): "; $id = ReadLine(0);
+    chomp $id;
+
+    if ($id =~ /^X$/ ) {
+        my $tool_list = GENDB::Remote::Server::ToolList->new(TOOLDB);
+        print "\n";
+        foreach (@{$tool_list->list()}) {
+            print $_->{tool_id}." |  ".$_->{tool_name}." -> ";
+            if ($_->{enabled} != 1) {
+                print "DISABLED\n";
+            } else {
+                print "ENABLED\n";
+            }
+        }
+        print "\n";
+    }
+    while ($id !~ /^\d+$/ ) {
+        if ($id ne "X") { print "Value has to be numeric.\n"; }
+        print "Tool ID: "; $id = ReadLine(0);
+        chomp $id;
+    }
+
+    my $tool = GENDB::Remote::Server::Tool->init($id);
+    unless ($tool->enable()) {
+        print "Could not enable tool.\n";
+    }
+    print "Enabled tool ".$tool->name()."\n";
+}
+
+sub disable_tool {
+    my $id;
+    ReadMode('normal');
+    print "Tool ID ('X' to list tools): "; $id = ReadLine(0);
+    chomp $id;
+
+    if ($id =~ /^X$/ ) {
+        my $tool_list = GENDB::Remote::Server::ToolList->new(TOOLDB);
+        print "\n";
+        foreach (@{$tool_list->list()}) {
+            print $_->{tool_id}." |  ".$_->{tool_name}." -> ";
+            if ($_->{enabled} != 1) { 
+                print "DISABLED\n";
+            } else { 
+                print "ENABLED\n";
+            }
+        }
+        print "\n";
+    }
+    while ($id !~ /^\d+$/ ) {
+        if ($id ne "X") { print "Value has to be numeric.\n"; }
+        print "Tool ID: "; $id = ReadLine(0);
+        chomp $id;
+    }
+
+    my $tool = GENDB::Remote::Server::Tool->init($id);
+    unless ($tool->disable()) {
+        print "Could not disable tool.\n";
+    }
+    print "Disabled tool ".$tool->name()."\n";
+
+}

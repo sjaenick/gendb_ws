@@ -1,0 +1,101 @@
+Server:
+
++----------------------+
+| ToolList             |
++----------------------+
+| tool_id:    INT      |
+| tool_name:  TEXT     |
+| tool_descr: TEXT     |
+| cmd_line:   TEXT     |
+| enabled:    BOOLEAN  |
++----------------------+
+
++-----------------------+
+| JobQueue              |
++-----------------------+
+| job_id:      INT      |
+| tool:        TEXT     |
+| status:      INT      |
+| client_cert: TEXT     | (subject of client certificate)
+| input:       TEXT     |
+| output_file: TEXT     |
+| error_file:  TEXT     |
+| result_fetched: TEXT  |
++-----------------------+
+
+Small but useful helpers:
+* list_tools
+* add_tool
+* remove_tool
+* disable_tool
+* enable_tool 
+* kill_job
+------------------------------------------------------------------
+Job::States (use DRMAA constants?)
+
+PENDING
+RUNNING
+FAILED
+FINISHED
+UNKNOWN
+CANCEL_PENDING
+CANCELED
+
+Wie erfragen, kann DRMAA die direkt in der DB setzen (callback?)?
+
+Server Methods
+==================================================================
+
+info():
+   return [ tool_id, tool_name, tool_descr ] for enabled tools
+
+   SELECT tool_id, tool_name, tool_descr FROM ToolList WHERE
+   enabled=TRUE ORDER BY tool_id
+
+------------------------------------------------------------------
+
+submit(tool_id, input)
+   return job_id
+ 
+status(job_id)
+   return status
+
+   SELECT status FROM JobQueue WHERE job_id=$job_id AND 
+   client_cert=_get_cert_subject($ENV{..})
+
+result(job_id)
+   return result for (finished) jobs
+
+   SELECT output FROM JobQueue WHERE job_id=$job_id AND
+   client_cert=_get_cert_subject($ENV{..}) AND status=FINISHED
+
+cancel(job_id)
+   cancel processing of a job
+
+   DELETE FROM JobQueue WHERE job_id=$job_id AND
+   client_cert=_get_cert_subject($ENV{..})
+
+------------------------------------------------------------------
+
+run(tool_id, input)
+   return result
+
+==================================================================
+Misc Stuff:
+
+- bulk xmit vs single job transmission
+
+- create separate daemon for JobQueue status/DRMAA synchronisation?
+
+                  ,---- run() <-------------------------->
+                  |                                       
+                  |        status()     +----------+      
+Apache <-----> Handler <-- submit() --> | JobQueue | <---> submit_to_drmaa <--> Scheduler::DRMAA
+                  |        result()     +----------+           (qmgr)
+                info()     cancel()      |
+                  |                     +------------------------------+
+                  |                     |GENDB::Remote::AuthToken::X509|
+             +----------+               +------------------------------+
+             | ToolList |
+             +----------+
+

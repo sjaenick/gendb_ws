@@ -1,0 +1,313 @@
+package GENDB::Remote::Server::RequestHandler;
+
+=head1 NAME
+
+GENDB::Remote::Server::RequestHandler
+
+=head1 DESCRIPTION
+
+This module implements the methods that can be directly called by a Web
+Service client. All those methods and their parameters are documented in a
+WSDL (L<http://www.w3.org/TR/wsdl>) file which is used by the client
+to communicate with the server.
+
+=head1 CONFIGURATION
+
+See L<GENDB::Remote::Server::Configuration> for an explanation and example
+of the required configuration.
+
+=head1 Available methods
+
+=over 4
+
+=cut
+
+use strict;
+use warnings;
+
+use GENDB::Remote::Server::Configuration;
+use GENDB::Remote::Server::JobQueue;
+use GENDB::Remote::Server::Tool;
+use GENDB::Remote::AuthToken::X509;
+use Scheduler qw(:JOB_FLAGS);
+use POSIX qw(strftime :signal_h);
+
+
+=item * REF ON ARRAY B<info>()
+
+Retrieve a (stripped-down) list of all enabled tools that may be used for
+subsequent submit() calls.
+
+  RETURNS: a reference on an array (of hash references)
+
+=cut
+
+sub info {
+    eval "use GENDB::Remote::Server::ToolList;";
+    if ($@) {
+        die __PACKAGE__." Cannot load GENDB::Remote::Server::ToolList.\n";
+    }
+
+    my $tool_list = GENDB::Remote::Server::ToolList->new(_tooldb());
+    my @tools = @{$tool_list->list()};
+    my @enabled_tool_list;
+
+    foreach my $t (@tools) {
+        my %tool = %$t;
+        # only use enabled tools
+        if ($tool{enabled} != 0) {
+            # delete all unwanted keys 
+            delete $tool{tool_name};
+            delete $tool{tool_data};
+            delete $tool{enabled};
+
+            push @enabled_tool_list, $t;
+        }
+    }
+    return \@enabled_tool_list;
+}
+
+
+=item * REF ON ARRAY B<submit>($hashref)
+
+Submit a combination of a tool and at least one input sequence to be
+scheduled for asynchronous execution. The hash has to contain the
+following keys:
+
+  tool_id: ID of a tool
+  input:   reference on an array of sequences
+
+  RETURNS: reference on an array of job ids
+
+=cut
+
+sub submit {
+    my ($self, $data_ref) = @_;
+    my %data = %$data_ref;
+
+    unless (defined($data{tool_id})) {
+        die __PACKAGE__." Tool ID missing in request.\n";
+    }
+
+    unless (defined($data{input})) {
+        die __PACKAGE__." Request contains no tool input.\n";
+    }
+
+    my $tool = GENDB::Remote::Server::Tool->init($data{tool_id});
+    unless ($tool->available()) {
+        die __PACKAGE__." No such tool.\n";
+    }
+
+    my @job_ids;
+    my @sequences = @{$data{input}};
+    my $jq = GENDB::Remote::Server::JobQueue->new(_jobqueue());
+
+    foreach (@sequences) {
+        my $id = $jq->submit_job($data{tool_id}, $_);
+
+        if (defined($id)) {
+            push @job_ids, $id;
+        } else {
+            die __PACKAGE__." could not create job.\n";
+        }
+    }
+
+    $self->_signal_qmgr(SIGINT);
+
+    return \@job_ids;
+}
+
+=item * REF ON ARRAY B<status>($joblist)
+
+Invoke this method with a reference on an array of job ids as parameter
+and it will return a reference on an array of equal length containing
+the state of each job.
+
+  RETURNS: reference on array of job states
+
+=cut
+
+sub status {
+    my ($self, $data_ref) = @_;
+    my @job_ids = @$data_ref;
+    my @status;
+
+    my $jq = GENDB::Remote::Server::JobQueue->new(_jobqueue());
+    foreach my $id (@job_ids) {
+        my $job_state = $jq->job_status($id);
+        push @status, $job_state;
+    }
+
+    return \@status;
+}
+
+
+=item * VOID B<cancel>($joblist)
+
+Use this method with a reference on an array of job ids as parameter to
+let the execution system know that the results of one or several jobs
+are no longer needed and the corresponding jobs can be cancelled, if
+supported by the underlying execution system.
+
+=cut
+
+sub cancel {
+    my ($self, $data_ref) = @_;
+    my @job_ids = @$data_ref;
+    my $jq = GENDB::Remote::Server::JobQueue->new($self->_jobqueue);
+
+    foreach my $id (@job_ids) {
+        my $job_state = $jq->cancel_job($id);
+    }
+
+    $self->_signal_qmgr(SIGINT);
+}
+
+=item * REF ON ARRAY B<result>($joblist)
+
+Retrieve the output of finished jobs.
+
+  RETURNS: reference on array of hashes 
+
+=cut
+
+sub result {
+    my ($self, $data_ref) = @_;
+    my @job_ids = @$data_ref;
+    my $jq = GENDB::Remote::Server::JobQueue->new($self->_jobqueue);
+    my @results;
+
+    foreach my $id (@job_ids) {
+        my %job_result = ( jobid => $id,
+                           status => $jq->job_status($id));
+
+        if ($job_result{status} eq JOB_FINISHED) {
+            my $result = $self->_read_file($jq->get_result($id));
+            $job_result{output} = $result;
+        }
+        push @results, \%job_result;
+    }
+    return \@results;
+}
+
+
+=item * STRING B<run>($request_ref)
+
+Execute a tool on one input sequence and wait until the command has finished.
+
+  request_ref: reference on a hash containing the keys 'input', 'tool_id'
+               and 'attributes'
+
+  RETURNS: the output generated by the tool
+
+=cut
+
+sub run {
+    my ($self, $data_ref) = @_;
+    my %data = %$data_ref;
+
+    unless (defined($data{input})) {
+        die __PACKAGE__." No input data.\n";
+    }
+    unless (defined($data{tool_id})) {
+        die __PACKAGE__." Missing Tool ID.\n";
+    }
+
+    my $tool = GENDB::Remote::Server::Tool->init($data{tool_id});
+    my $token = GENDB::Remote::AuthToken::X509->new();
+    
+    $self->_accwrite($data{tool_id}, $token->auth_token());
+    return $tool->run($data{input}, %{$data{attributes}});
+}
+
+
+sub _read_file {
+    my ($self, $fname) = @_;
+
+    my $content;
+    open (F, "< $fname") or return "Server could not read file.\n";
+    { 
+      local $/ = undef;  # read entire file
+      $content = <F>;
+    }
+    close(F);
+
+    return $content;
+}
+
+
+sub _configfile {
+    return $ENV{gendb_VAR_DIR}.'/server.config';
+}
+
+
+sub _tooldb {
+    my $config = GENDB::Remote::Server::Configuration->new(_configfile());
+    my $tooldb = $config->get("ToolDB");
+
+    unless (defined($tooldb)) {
+        die __PACKAGE__.": Configuration error - missing ToolDB directive.\n";
+    }
+    return $tooldb;
+}
+
+
+sub _jobqueue {
+    my $config = GENDB::Remote::Server::Configuration->new(_configfile());
+    my $jq = $config->get("JobQueueDB");
+
+    unless (defined($jq)) {
+        die __PACKAGE__.": Configuration error - missing JobQueueDB directive.\n";
+    }
+    return $jq;
+}
+
+
+sub _accwrite {
+    my ($self, $toolid, $cert) = @_;
+
+    return unless (defined($toolid));
+    return unless (defined($cert));
+
+    my $config = GENDB::Remote::Server::Configuration->new(_configfile());
+    my $logfile = $config->get("AccountingFile");
+    return unless (defined($logfile));
+
+    open(F, ">> $logfile") or $self->_log_and_die( "Could not write to accounting file.\n");
+    print F strftime("%Y-%m-%d %H:%M:%S  ", localtime) . "RUN: Tool: " .$toolid. " User: ".$cert." \n";
+    close(F);
+}
+
+
+sub _signal_qmgr {
+    my ($self, $signal) = @_;
+
+    return unless ((defined($signal)) && ($signal =~ /\d+/ ));
+
+    my $config = GENDB::Remote::Server::Configuration->new(_configfile());
+    my $pidfile = $config->block(Process => "QMGR")->get("PidFile");
+
+    unless (defined($pidfile)) {
+        die __PACKAGE__.": Configuration error - missing PidFile directive.\n";
+    }
+
+    # qmgr might be down - but we still accept new jobs
+    return unless ((-e $pidfile) && (-r $pidfile)); 
+
+    open (PID, "< $pidfile") or return;
+    my $pid;
+    { 
+      local $/ = undef;  # read entire file
+      $pid = <PID>;
+    }
+    close(PID);
+
+    return unless ((defined($pid)) && ($pid =~ /\d+/ ));
+
+    kill($signal, $pid);
+}
+
+
+1;
+
+=back

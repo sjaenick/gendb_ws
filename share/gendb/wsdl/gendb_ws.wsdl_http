@@ -1,0 +1,195 @@
+<?xml version="1.0"?>
+<definitions xmlns:tns="urn:GenDB" xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/" xmlns:enc="http://schemas.xmlsoap.org/soap/encoding/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/" xmlns="http://schemas.xmlsoap.org/wsdl/" name="GenDB" targetNamespace="urn:GenDB">
+  <types>
+    <xsd:schema targetNamespace="urn:GenDB">
+      <xsd:complexType name="Tool">
+        <xsd:sequence>
+          <xsd:element name="tool_id" type="xsd:nonNegativeInteger" minOccurs="1" maxOccurs="1"/>
+          <xsd:element name="tool_descr" type="xsd:string" minOccurs="1" maxOccurs="1"/>
+        </xsd:sequence>
+      </xsd:complexType>
+      <xsd:complexType name="JobCluster">
+        <xsd:complexContent>
+          <xsd:element name="tool_id" type="xsd:nonNegativeInteger" minOccurs="1" maxOccurs="1"/>
+          <xsd:restriction base="enc:Array" minOccurs="1" maxOccurs="1">
+            <xsd:attribute name="input" ref="enc:arrayType" wsdl:arraytype="tns:ArrayOfString[]"/>
+          </xsd:restriction>
+        </xsd:complexContent>
+      </xsd:complexType>
+      <xsd:complexType name="ArrayOfTool">
+        <xsd:complexContent>
+          <xsd:restriction base="enc:Array">
+            <xsd:attribute ref="enc:arrayType" wsdl:arraytype="tns:Tool[]"/>
+          </xsd:restriction>
+        </xsd:complexContent>
+      </xsd:complexType>
+      <xsd:complexType name="ArrayOfInteger">
+        <xsd:complexContent>
+          <xsd:restriction base="enc:Array">
+            <xsd:attribute ref="enc:arrayType" wsdl:arraytype="xsd:nonNegativeInteger[]"/>
+          </xsd:restriction>
+        </xsd:complexContent>
+      </xsd:complexType>
+      <xsd:complexType name="ArrayOfString">
+        <xsd:complexContent>
+          <xsd:restriction base="enc:Array">
+            <xsd:attribute ref="enc:arrayType" wsdl:arraytype="xsd:string[]"/>
+          </xsd:restriction>
+        </xsd:complexContent>
+      </xsd:complexType>
+      <xsd:complexType name="Result">
+        <xsd:sequence>
+          <xsd:element name="jobid" type="xsd:nonNegativeInteger" minOccurs="1" maxOccurs="1"/>
+          <xsd:element name="status" type="xsd:nonNegativeInteger" minOccurs="1" maxOccurs="1"/>
+          <xsd:element name="output" type="xsd:string" minOccurs="0" maxOccurs="1"/>
+        </xsd:sequence>
+      </xsd:complexType>
+      <xsd:complexType name="ResultCluster">
+        <xsd:complexContent>
+          <xsd:restriction base="enc:Array">
+            <xsd:attribute ref="enc:arrayType" wsdl:arraytype="tns:Result[]"/>
+          </xsd:restriction>
+        </xsd:complexContent>
+      </xsd:complexType>
+      <xsd:complexType name="Hash">
+        <xsd:sequence>
+          <xsd:element name="item" minOccurs="0" maxOccurs="unbounded">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="key" type="xsd:anyType" />
+                <xsd:element name="value" type="xsd:anyType" />
+              </xsd:sequence>
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:sequence>
+      </xsd:complexType>
+
+      <xsd:complexType name="RunReq">
+        <xsd:complexContent>
+          <xsd:element name="attributes" type="tns:Hash" minOccurs="1" maxOccurs="1"/>
+          <xsd:element name="tool_id" type="xsd:nonNegativeInteger" minOccurs="1" maxOccurs="1"/>
+          <xsd:element name="input" type="xsd:string" minOccurs="1" maxOccurs="1"/>
+        </xsd:complexContent>
+      </xsd:complexType>
+
+    </xsd:schema>
+  </types>
+  <message name="InfoResponse">
+    <part name="Tools" type="tns:ArrayOfTool"/>
+  </message>
+  <message name="SubmitRequest">
+    <part name="Jobs" type="tns:JobCluster"/>
+  </message>
+  <message name="SubmitResponse">
+    <part name="JobIds" type="tns:ArrayOfInteger"/>
+  </message>
+  <message name="StatusRequest">
+    <part name="JobIds" type="tns:ArrayOfInteger"/>
+  </message>
+  <message name="StatusResponse">
+    <part name="JobStatusList" type="tns:ArrayOfInteger"/>
+  </message>
+  <message name="ResultRequest">
+    <part name="JobIds" type="tns:ArrayOfInteger"/>
+  </message>
+  <message name="ResultResponse">
+    <part name="Results" type="tns:ResultCluster"/>
+  </message>
+  <message name="CancelRequest">
+    <part name="JobIds" type="tns:ArrayOfInteger"/>
+  </message>
+  <message name="RunRequest">
+    <part name="ReqData" type="tns:RunReq"/>
+  </message>
+  <message name="RunResponse">
+    <part name="Results" type="tns:ArrayOfString"/>
+  </message>
+  <portType name="GenDBPort">
+    <operation name="info">
+      <input message="xsd:null"/>
+      <output message="tns:InfoResponse"/> 
+    </operation>
+    <operation name="submit">
+      <input message="tns:SubmitRequest"/>
+      <output message="tns:SubmitResponse"/>
+    </operation>
+    <operation name="status">
+      <input message="tns:StatusRequest"/>
+      <output message="tns:StatusResponse"/>
+    </operation>
+    <operation name="result">
+      <input message="tns:ResultRequest"/>
+      <output message="tns:ResultResponse"/>
+    </operation>
+    <operation name="cancel">
+      <input message="tns:CancelRequest"/>
+      <output message="xsd:null"/>
+    </operation>
+    <operation name="run">
+      <input message="tns:RunRequest"/>
+      <output message="tns:RunResponse"/>
+    </operation>
+  </portType>
+  <binding name="SOAP" type="tns:GenDBPort">
+    <soap:binding style="rpc" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="info">
+      <soap:operation soapAction="urn:GenDB"/>
+      <input>
+        <soap:body use="encoded" namespace="urn:GenDB" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/>
+      </input>
+      <output>
+        <soap:body use="encoded" namespace="urn:GenDB" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/>
+      </output>
+    </operation>
+    <operation name="submit">
+      <soap:operation soapAction="urn:GenDB"/>
+      <input>
+        <soap:body use="encoded" namespace="urn:GenDB" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/>
+      </input>
+      <output>
+        <soap:body use="encoded" namespace="urn:GenDB" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/>
+      </output>
+    </operation>
+    <operation name="status">
+      <soap:operation soapAction="urn:GenDB"/>
+      <input>
+        <soap:body use="encoded" namespace="urn:GenDB" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/>
+      </input>
+      <output>
+        <soap:body use="encoded" namespace="urn:GenDB" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/>
+      </output>
+    </operation>
+    <operation name="result">
+      <soap:operation soapAction="urn:GenDB"/>
+      <input>
+        <soap:body use="encoded" namespace="urn:GenDB" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/>
+      </input>
+      <output>
+        <soap:body use="encoded" namespace="urn:GenDB" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/>
+      </output>
+    </operation>
+    <operation name="cancel">
+      <soap:operation soapAction="urn:GenDB"/>
+      <input>
+        <soap:body use="encoded" namespace="urn:GenDB" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/>
+      </input>
+      <output>
+        <soap:body use="encoded" namespace="urn:GenDB" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/>
+      </output>
+    </operation>
+    <operation name="run">
+      <soap:operation soapAction="urn:GenDB"/>
+      <input>
+        <soap:body use="encoded" namespace="urn:GenDB" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/>
+      </input>
+      <output>
+        <soap:body use="encoded" namespace="urn:GenDB" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/>
+      </output>
+    </operation>
+  </binding>
+  <service name="GenDB">
+    <port name="GenDBPort" binding="tns:SOAP">
+      <soap:address location="http://zee.cebitec.uni-bielefeld.de:8888/perl/"/>
+    </port>
+  </service>
+</definitions>

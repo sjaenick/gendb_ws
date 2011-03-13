@@ -1,0 +1,370 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+use IO::Handle;
+use Term::ReadKey;
+use Switch;
+use URI::file;
+
+use GENDB::Remote::Client::Configuration;
+
+STDOUT->autoflush(1);
+
+unless (scalar(@ARGV) == 1) {
+    usage();
+}
+
+switch ($ARGV[0]) {
+    case "-ls"		{ list_sites(); }
+    case "-lp"		{ list_projects(); }
+    case "-lt"		{ list_tools(); }
+    case "-lS"		{ list_site_tools(); }
+    case "-lP"		{ list_project_tools(); }
+    case "-as"		{ add_site(); }
+    case "-ap"		{ add_project(); }
+    case "-at"		{ add_tool(); }
+    case "-ds"		{ delete_site(); }
+    case "-dp"		{ delete_project(); }
+    case "-dt"		{ delete_tool(); }
+    case "-x"		{ add_tool_to_project(); }
+    case "-X"		{ remove_tool_from_project(); }
+    else		{ usage(); }
+}
+
+sub usage {
+    print <<EOF;
+
+  GenDB WebServices Client Configuration
+
+  -lp	List projects
+  -ls	List remote sites
+  -lt	List tools
+  -lS   List all tools for a site
+  -lP	List all tools for a project
+
+  -ap	Add a new project
+  -as	Add a new remote site
+  -at   Add a new tool
+
+  -dp	Delete a project
+  -ds	Delete a remote site
+  -dt	Delete a tool
+
+  -x	Add a tool to a project
+  -X	Remove a tool from a project
+
+EOF
+    exit 1;
+}
+
+
+sub add_site {
+    my %site;
+    ReadMode('normal');
+    print "(M)andatory, (O)ptional, Ctrl-C to abort.\n\n";
+    print "(M) Site name: "; $site{name} = ReadLine(0); chomp $site{name};
+    while ( $site{name} =~ /^$/ ) {
+        print "Required value.\n";
+        print "(M) Site name: "; $site{name} = ReadLine(0); chomp $site{name};
+    }
+    my $cfg = GENDB::Remote::Client::Configuration->new();
+    while (ref($cfg->get_site($site{name})) eq 'HASH') {
+        print "Site ".$site{name}." already exists.\n";
+        print "(M) Site name: "; $site{name} = ReadLine(0); chomp $site{name};
+    }
+
+    print "(M) Path to WSDL file: "; $site{WSDL} = ReadLine(0); chomp $site{WSDL};
+
+    while ( $site{WSDL} =~ /^$/ ) {
+        print "Required value.\n";
+        print "(M) Path to WSDL file: "; $site{WSDL} = ReadLine(0); chomp $site{WSDL};
+    }
+
+    my $uri = URI::file->new_abs($site{WSDL});
+    $site{WSDL} = $uri->as_string;
+
+    print "(O) Path to X.509 certificate: "; $site{CertFile} = ReadLine(0); 
+    print "(O) Path to X.509 certificate key: "; $site{CertKeyFile} = ReadLine(0); 
+    print "(O) Polling interval: "; $site{PollInterval} = ReadLine(0); 
+
+    foreach (keys %site) { chomp $site{$_}; }
+
+    while (($site{PollInterval} !~ /^\d+$/ ) && ($site{PollInterval} !~ /^$/ )) { 
+        print "Value has to be numeric.\n"; 
+        print "(O) Polling interval: "; $site{PollInterval} = ReadLine(0); 
+        chomp $site{PollInterval};
+    }
+
+    if ($site{PollInterval} =~ /^$/ ) { $site{PollInterval} = 60; }
+
+    unless ($cfg->add_site(%site)) {
+        die "Could not add site.\n";
+    }
+    print "Site $site{name} added.\n";
+}
+
+
+sub delete_site {
+    my $name;
+    ReadMode('normal');
+    print "Available sites:\n\n";
+    list_sites();
+    print "\nSite name: "; $name = ReadLine(0); 
+    chomp $name;
+    my $cfg = GENDB::Remote::Client::Configuration->new();
+    unless (ref($cfg->get_site($name)) eq 'HASH') {
+        die "No such site.\n";
+    }
+    
+    unless ($cfg->remove_site($name)) {
+        die "Could not delete site.\n";
+    }
+    print "Deleted site $name.\n";
+}
+
+
+sub add_project {
+    my $name;
+    ReadMode('normal');
+    print "Project name: "; $name = ReadLine(0); chomp $name;
+    my $cfg = GENDB::Remote::Client::Configuration->new();
+    while (defined($cfg->get_project($name))) {
+        print "Project ".$name." already exists.\n";
+        print "Project name: "; $name = ReadLine(0); chomp $name;
+    }
+
+    unless ($cfg->add_project($name)) {
+        die "Could not add project.\n";
+    }
+    print "Project $name created.\n";
+}
+
+
+sub delete_project {
+    my $name; 
+    ReadMode('normal');
+    print "Available projects:\n\n";
+    list_projects();
+    print "\nProject name: "; $name = ReadLine(0); chomp $name;
+    my $cfg = GENDB::Remote::Client::Configuration->new();
+    my $proj_id = $cfg->get_project($name);
+    unless (defined($proj_id)) {
+        die "Project $name does not exist.\n";
+    }
+    unless ($cfg->remove_project($proj_id)) {
+        die "Could not delete project.\n";
+    }
+    print "Project $name deleted.\n";
+}
+
+
+sub add_tool {
+    my %tool;
+    ReadMode('normal');
+    print "(M)andatory, (O)ptional, Ctrl-C to abort.\n\n";
+    print "(M) Tool name: "; $tool{name} = ReadLine(0); chomp $tool{name};
+    my $cfg = GENDB::Remote::Client::Configuration->new();
+    while (ref($cfg->get_tool($tool{name})) eq 'HASH') {
+        print "Tool ".$tool{name}." already exists.\n";
+        print "(M) Tool name: "; $tool{name} = ReadLine(0); chomp $tool{name};
+    }
+
+    print "(M) Remote site name ('X' to list sites): "; 
+    $tool{RemoteSite} = ReadLine(0); chomp $tool{RemoteSite};
+
+    if ($tool{RemoteSite} =~ /^X$/ ) {
+        print "\n";
+        foreach (@{$cfg->list_sites()}) {
+            print "  ".$_->{name}."\n";
+        }
+        print "\n";
+    }
+
+    while (ref($cfg->get_site($tool{RemoteSite})) ne 'HASH') {
+        if ($tool{RemoteSite} ne "X" ) { print "No such site.\n"; }
+        print "(M) Remote site name: "; $tool{RemoteSite} = ReadLine(0);
+        chomp $tool{RemoteSite};
+    }
+    my %site = %{$cfg->get_site($tool{RemoteSite})};
+
+    print "(M) Remote tool ID ('X' to list tools): "; $tool{RemoteID} = ReadLine(0); 
+    chomp $tool{RemoteID};
+
+    my $have_info = 0;
+    my @remote_tools;
+
+    if ($tool{RemoteID} eq "X" ) {
+        use GENDB::Remote::Client::WebServices;
+
+        $ENV{HTTPS_CERT_FILE} = $site{CertFile};
+        $ENV{HTTPS_KEY_FILE}  = $site{CertKeyFile};
+        print "Sending info() request..\n\n";
+        my $ws = GENDB::Remote::Client::WebServices->new();
+        my $result = $ws->info($site{WSDL});
+
+        unless (defined($result)) {
+            die "No tools offered by server.\n";
+        }
+
+        my @t = @{$result};
+        $have_info = 1;
+
+        print "\n ID\n";
+        foreach (@t) {
+            print "  ".$_->{tool_id}." |  ".$_->{tool_descr}."\n";
+            push @remote_tools, $_->{tool_id};
+        }
+        delete $ENV{HTTPS_CERT_FILE};
+        delete $ENV{HTTPS_KEY_FILE};
+        print "\n";
+    }
+
+    while ($tool{RemoteID} !~ /^\d+$/ ) {
+        if ($tool{RemoteID} ne "X") { print "Value has to be numeric.\n"; }
+        print "(M) Remote tool ID: "; $tool{RemoteID} = ReadLine(0);
+        chomp $tool{RemoteID};
+
+        # check if ID is valid
+        if (($have_info == 1) && ($tool{RemoteID} =~ /^\d+$/ )) {
+            my $valid = 0;
+            foreach (@remote_tools) {
+                if ($tool{RemoteID} == $_) { $valid = 1; last; }
+            }
+            if ($valid == 0) { 
+                $tool{RemoteID} = "X";  # invalidate selection
+                print "Site does not offer this tool ID.\n";
+            }
+        }
+    }
+
+    foreach (keys %tool) { chomp $tool{$_}; }
+    unless ($cfg->add_tool(%tool)) {
+        die "Could not add tool.\n";
+    }
+    print "Tool added.\n";
+}
+
+
+sub delete_tool {
+    my $name;
+    ReadMode('normal');
+    print "Available tools:\n\n";
+    list_tools();
+    print "\nTool name: "; $name = ReadLine(0);
+    chomp $name;
+
+    my $cfg = GENDB::Remote::Client::Configuration->new();
+    unless (ref($cfg->get_tool($name)) eq 'HASH') {
+        die "No such tool.\n";
+    }
+
+    unless ($cfg->remove_tool($name)) {
+        die "Could not delete tool.\n";
+    }
+    print "Deleted tool $name.\n";
+}
+
+
+sub add_tool_to_project {
+    ReadMode('normal');
+    print "(M)andatory, (O)ptional, Ctrl-C to abort.\n\n";
+    print "(M) Tool name: "; my $name = ReadLine(0);
+    chomp $name;
+
+    my $cfg = GENDB::Remote::Client::Configuration->new();
+    unless (ref($cfg->get_tool($name)) eq 'HASH') {
+        die "No such tool.\n";
+    }
+
+    print "(M) Project name: "; my $proj = ReadLine(0);
+    chomp $proj;
+    my $proj_id = $cfg->get_project($proj);
+    unless (defined($proj_id)) {
+        die "Project $proj does not exist.\n";
+    }
+
+    unless ($cfg->add_tool_to_project($proj, %{$cfg->get_tool($name)})) {
+        die "Could not add tool to project.\n";
+    }
+    print "Tool $name added to project $proj.\n";
+}
+
+
+sub remove_tool_from_project {
+    ReadMode('normal');
+    print "(M)andatory, (O)ptional, Ctrl-C to abort.\n\n";
+    print "(M) Tool name: "; my $name = ReadLine(0);
+    chomp $name;
+
+    my $cfg = GENDB::Remote::Client::Configuration->new();
+    unless (ref($cfg->get_tool($name)) eq 'HASH') {
+        die "No such tool.\n";
+    }
+
+    print "(M) Project name: "; my $proj = ReadLine(0); 
+    chomp $proj;
+    my $proj_id = $cfg->get_project($proj);
+    unless (defined($proj_id)) {
+        die "Project $proj does not exist.\n";
+    }
+
+    unless ($cfg->remove_tool_from_project($proj, %{$cfg->get_tool($name)})) {
+        die "Could not remove tool from project.\n";
+    }
+    print "Tool $name removed from project $proj.\n";
+}
+
+
+sub list_sites {
+    my $cfg = GENDB::Remote::Client::Configuration->new();
+    my @sites = @{$cfg->list_sites()};
+    foreach (@sites) { print "  $_->{name}  ($_->{WSDL})\n"; }
+}
+
+
+sub list_tools {
+    my $cfg = GENDB::Remote::Client::Configuration->new();
+    my @tools = @{$cfg->list_tools()};
+    foreach (@tools) { print "  $_->{name}  | $_->{RemoteSite} | $_->{RemoteID}\n"; }
+}
+
+
+sub list_projects {
+    my $cfg = GENDB::Remote::Client::Configuration->new();
+    my @projects = @{$cfg->list_projects()};
+    foreach (@projects) { print "  $_\n"; }
+}
+
+
+sub list_site_tools {
+    my $site;
+    ReadMode('normal');
+    print "(M)andatory, (O)ptional, Ctrl-C to abort.\n\n";
+    print "(M) Site name: "; $site = ReadLine(0); chomp $site;
+    my $cfg = GENDB::Remote::Client::Configuration->new();
+
+    unless (ref($cfg->get_site($site)) eq 'HASH') {
+        die "No such site.\n";
+    }
+
+    my @t = @{$cfg->site_tools($site)};
+    foreach (@t) { print "  $_\n"; }
+}
+
+
+sub list_project_tools {
+    my $proj;
+    ReadMode('normal');
+    print "(M)andatory, (O)ptional, Ctrl-C to abort.\n\n";
+    print "(M) Project name: "; $proj = ReadLine(0); chomp $proj;
+    my $cfg = GENDB::Remote::Client::Configuration->new();
+    my $proj_id = $cfg->get_project($proj);
+    unless (defined($proj_id)) {
+        die "Project $proj does not exist.\n";
+    }
+
+    my @t = @{$cfg->project_tools($proj)};
+    foreach (@t) { print "  ".$cfg->get_tool_by_id($_)->{name}."\n"; }
+}

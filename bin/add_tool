@@ -1,0 +1,37 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+use GENDB::Remote::Server::Tool;
+
+unless (scalar(@ARGV) == 2) {
+    print <<EOF;
+GenDB WS server administration tools
+
+usage: $0 tool_name description
+
+e.g. $0 BLAST 'Basic local alignment search tool' 
+
+Adds a new tool to the the database. 
+
+Please note that you have to enter the configuration data for a tool into the server-side
+configuration file before you can add the tool to the database.
+
+A newly added tool is marked as disabled and may be enabled using the 
+enable_tool command.
+
+EOF
+exit 0;
+}
+
+my %new_tool = ( tool_name => 'FOOBAR',
+                 tool_descr => 'just a test',
+                 enabled => 0,
+                 tool_data => ( EXEC_CMD => "/path/to/foo",
+                                RUN_CMD => "/path/to/bar" ));
+
+my $tool = GENDB::Remote::Server::Tool->new(%new_tool);
+
+print "Added new tool ".$tool->name." with ID ".$tool->id."\n";
+
